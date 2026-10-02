@@ -56,6 +56,14 @@ Complete-AICloneSeed `
 Read whatever `Complete-AICloneSeed` flags before telling the new clone to
 treat its memory as reliable.
 
+**Self-cloning:** `SourceHome` can point at your own home, to make a clone of
+yourself. The new clone starts as a copy either way - its seeded memory is
+identity-specific to whoever it was cloned from (name, voice, prior
+decisions), not a blank slate. Expect it to read that memory as inherited
+context about someone else's history, not its own, and to choose its own
+name/identity from there - don't assume it keeps the source's name just
+because it has the source's memory.
+
 ## Renaming or moving an existing clone's home
 
 Same function covers both — a rename is just a move within the same parent
@@ -72,6 +80,16 @@ This moves both the working folder and its `.claude` project directory
 together, so a session opened in the new location comes up with memory and
 EOT Journals intact — validated end-to-end against Tessera on 2026-10-02
 (one rename, then one full relocation into the current `Aletheia` layout).
+
+## Known unverified, worth checking if something seems off
+
+- `~\.claude.json` may hold per-path state (trust/permission entries). A move
+  could leave stale entries there, or cause Claude Code to re-prompt for
+  trust in the new location. Not yet confirmed either way.
+- Nothing in this script checks whether a session is still open against the
+  folder it's about to touch - `Move-AIClone` will just fail (ideally) if the
+  folder is locked, but this hasn't been tested against every way Windows
+  might hold a folder open.
 
 ## How the project key is derived
 

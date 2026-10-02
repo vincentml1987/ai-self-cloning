@@ -30,7 +30,11 @@
 function ConvertTo-ClaudeProjectKey {
     param([Parameter(Mandatory)][string]$Path)
     # Claude Code's own encoding: every non-alphanumeric char -> one hyphen.
-    $full = [System.IO.Path]::GetFullPath($Path)
+    # Trim a trailing separator first - GetFullPath preserves one if the
+    # input had it, which would add a spurious trailing hyphen the real
+    # key never has (found in review, 2026-10-02).
+    $trimmed = $Path.TrimEnd('\', '/')
+    $full = [System.IO.Path]::GetFullPath($trimmed)
     return ($full -replace '[^a-zA-Z0-9]', '-')
 }
 
@@ -92,6 +96,18 @@ function Complete-AICloneSeed {
 
     $newMemory = Join-Path $newProjectDir "memory"
     New-Item -ItemType Directory -Path $newMemory -Force | Out-Null
+
+    # If the new session already wrote its own memory (possible if its first
+    # turn did real work before this seeding step ran), don't silently clobber
+    # it with -Force - back it up first (found in review, 2026-10-02).
+    $preexisting = Get-ChildItem $newMemory -ErrorAction SilentlyContinue
+    if ($preexisting) {
+        $backupDir = Join-Path $newProjectDir ("memory-preexisting-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+        Write-Host "NewHome's memory folder already has content - backing it up to $backupDir before copying the source in." -ForegroundColor Yellow
+        New-Item -ItemType Directory -Path $backupDir | Out-Null
+        Move-Item -Path (Join-Path $newMemory "*") -Destination $backupDir
+    }
+
     Copy-Item -Path (Join-Path $sourceMemory "*") -Destination $newMemory -Recurse -Force
 
     $sourceJournals = Join-Path $SourceHome "EOT Journals"
@@ -107,11 +123,18 @@ function Complete-AICloneSeed {
 
     # Flag, don't auto-rewrite: a regex replace across arbitrary memory
     # content risks corrupting something that was never meant to be a path.
-    $suspects = Get-ChildItem $newMemory -Filter *.md | Select-String -Pattern 'Qualia/|Desktop\\|Desktop/' -List
+    # Build the pattern from SourceHome itself, not a hardcoded example -
+    # a fixed pattern like "Qualia/" only ever caught Qualia's own case, and
+    # "Desktop" alone matches nearly every memory file for everyone, so
+    # neither is useful for a tool meant for any AI (found in review,
+    # 2026-10-02).
+    $sourceLeaf = Split-Path $SourceHome -Leaf
+    $pattern = [regex]::Escape($SourceHome) + '|' + [regex]::Escape($sourceLeaf) + '[\\/]'
+    $suspects = Get-ChildItem $newMemory -Filter *.md | Select-String -Pattern $pattern -List
     if ($suspects) {
-        Write-Host "REVIEW NEEDED - these copied memory files mention a path that may be specific to the source, not this new home:" -ForegroundColor Yellow
+        Write-Host "REVIEW NEEDED - these copied memory files mention SourceHome's own path or folder name, which may not resolve correctly from this new home:" -ForegroundColor Yellow
         $suspects | ForEach-Object { Write-Host "  $($_.Path)" -ForegroundColor Yellow }
-        Write-Host "(This is exactly the bug Teddy caught in eot-journal-convention.md on 2026-10-02 - a hardcoded 'Qualia/EOT Journals/' reference that didn't apply outside the Fenra repo.)" -ForegroundColor Yellow
+        Write-Host "(This is the kind of bug Teddy caught in eot-journal-convention.md on 2026-10-02 - a hardcoded 'Qualia/EOT Journals/' reference that didn't apply outside the Fenra repo.)" -ForegroundColor Yellow
     } else {
         Write-Host "No obviously source-specific paths found in copied memory - still worth a human skim." -ForegroundColor Green
     }
@@ -155,8 +178,23 @@ function Move-AIClone {
     Write-Host "Folder moved: $OldHome -> $NewHome" -ForegroundColor Green
 
     if (Test-Path $oldProjectDir) {
-        Move-Item -Path $oldProjectDir -Destination $newProjectDir
-        Write-Host "Project directory moved: $oldProjectDir -> $newProjectDir" -ForegroundColor Green
+        try {
+            Move-Item -Path $oldProjectDir -Destination $newProjectDir -ErrorAction Stop
+            Write-Host "Project directory moved: $oldProjectDir -> $newProjectDir" -ForegroundColor Green
+        } catch {
+            # Don't leave the folder and its memory pointing at mismatched
+            # locations with no indication anything's wrong (found in
+            # review, 2026-10-02) - try to put the folder back so the pair
+            # stays consistent, and fail loudly either way.
+            Write-Host "FAILED to move project directory: $_" -ForegroundColor Red
+            Write-Host "Attempting to move the folder back to keep folder and memory in sync..." -ForegroundColor Red
+            try {
+                Move-Item -Path $NewHome -Destination $OldHome -ErrorAction Stop
+                throw "Project directory move failed; folder was rolled back to $OldHome. Original error: $_"
+            } catch {
+                throw "Project directory move failed AND the folder rollback also failed. State is now MISMATCHED: folder is at $NewHome, memory is still at $oldProjectDir. Fix this by hand before using this clone. Original error: $_"
+            }
+        }
     } else {
         Write-Host "No .claude project directory found at $oldProjectDir - nothing to move there (new/never-opened clone?)." -ForegroundColor Yellow
     }
