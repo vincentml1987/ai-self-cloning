@@ -186,13 +186,22 @@ function Move-AIClone {
             # locations with no indication anything's wrong (found in
             # review, 2026-10-02) - try to put the folder back so the pair
             # stays consistent, and fail loudly either way.
-            Write-Host "FAILED to move project directory: $_" -ForegroundColor Red
+            $originalError = $_
+            Write-Host "FAILED to move project directory: $originalError" -ForegroundColor Red
             Write-Host "Attempting to move the folder back to keep folder and memory in sync..." -ForegroundColor Red
+            # The success message is thrown OUTSIDE the try below: thrown
+            # inside it, the rollback's own catch would swallow it and
+            # report a successful rollback as a failed one (found in
+            # review by Tessera, 2026-10-02).
+            $rolledBack = $false
             try {
                 Move-Item -Path $NewHome -Destination $OldHome -ErrorAction Stop
-                throw "Project directory move failed; folder was rolled back to $OldHome. Original error: $_"
+                $rolledBack = $true
             } catch {
-                throw "Project directory move failed AND the folder rollback also failed. State is now MISMATCHED: folder is at $NewHome, memory is still at $oldProjectDir. Fix this by hand before using this clone. Original error: $_"
+                throw "Project directory move failed AND the folder rollback also failed ($_). State is now MISMATCHED: folder is at $NewHome, memory is still at $oldProjectDir. Fix this by hand before using this clone. Original error: $originalError"
+            }
+            if ($rolledBack) {
+                throw "Project directory move failed; folder was rolled back to $OldHome. Original error: $originalError"
             }
         }
     } else {
